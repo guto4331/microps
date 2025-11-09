@@ -100,6 +100,11 @@ int net_input_handler(uint16_t type, const uint8_t* data, size_t len,
 int net_run(void) {
     struct net_device* dev;
 
+    if (intr_run() < 0) {
+        errorf("intr_run() failed");
+        return -1;
+    }
+
     debugf("opening all devices...");
     for (dev = devices; dev != NULL; dev = dev->next) {
         net_device_open(dev);
@@ -115,11 +120,15 @@ void net_shutdown(void) {
     for (dev = devices; dev != NULL; dev = dev->next) {
         net_device_close(dev);
     }
+    intr_shutdown();
     debugf("shutdown complete");
 }
 
 int net_init(void) {
-    // TODO
+    if (intr_init() < 0) {
+        errorf("intr_init() failed");
+        return -1;
+    }
     infof("initialized");
     return 0;
 }
