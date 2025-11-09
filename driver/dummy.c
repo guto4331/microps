@@ -1,0 +1,42 @@
+#include <stddef.h>
+#include <stdint.h>
+#include <stdio.h>
+
+#include "net.h"
+#include "util.h"
+
+#define DUMMY_MTU UINT16_MAX /* maximum size of IP datagram */
+
+static int dummy_transmit(struct net_device* dev, uint16_t type,
+                          const uint8_t* data, size_t len, const void* dst) {
+    debugf("dev=%s, type=0x%04x, len=%zu", dev->name, type, len);
+    debugdump(data, len);
+    /* 何もしない */
+    return 0;
+}
+
+static struct net_device_ops dummy_ops = {
+    .transmit = dummy_transmit,
+};
+
+struct net_device* dummy_init(void) {
+    struct net_device* dev;
+
+    dev = net_device_alloc();
+    if (!dev) {
+        errorf("failed to allocate device");
+        return NULL;
+    }
+    dev->type = NET_DEVICE_TYPE_DUMMY;
+    dev->mtu = DUMMY_MTU;
+    dev->hlen = 0;
+    dev->alen = 0;
+    dev->ops = &dummy_ops;
+
+    if (net_device_register(dev) < 0) {
+        errorf("failed to register device");
+        return NULL;
+    }
+    debugf("device initialized: dev=%s", dev->name);
+    return dev;
+}
