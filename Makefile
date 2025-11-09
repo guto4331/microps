@@ -4,11 +4,13 @@ DRIVERS = driver/dummy.o \
 		  driver/loopback.o \
 
 OBJS = util.o \
-	   net.o\
+	   net.o \
+	   ip.o \
 
 TESTS = test/step0.exe \
 		test/device_management.exe \
-		test/loopback.exe
+		test/loopback.exe \
+		test/protocol_management.exe \
 
 CFLAGS := $(CFLAGS) -g -W -Wall -Wno-unused-parameter -iquote .
 
