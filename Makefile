@@ -1,6 +1,6 @@
-APPS = 
+APPS =
 
-DRIVERS = 
+DRIVERS =
 
 OBJS = util.o \
 
