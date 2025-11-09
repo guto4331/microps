@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "net.h"
 #include "platform.h"
 #include "util.h"
 
@@ -83,6 +84,9 @@ static void* intr_thread(void* arg) {
             case SIGHUP:  // 割り込みスレッドを終了させる
                 terminate = 1;
                 break;
+            case SIGUSR1:  // ソフトウェア割り込み
+                net_softirq_handler();
+                break;
             default:
                 for (entry = irqs; entry; entry = entry->next) {
                     if (entry->irq == (unsigned int)sig) {
@@ -127,5 +131,6 @@ int intr_init(void) {
     pthread_barrier_init(&barrier, NULL, 2);
     sigemptyset(&sigmask);
     sigaddset(&sigmask, SIGHUP);
+    sigaddset(&sigmask, SIGUSR1);
     return 0;
 }

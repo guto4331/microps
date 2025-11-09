@@ -160,10 +160,37 @@ int net_input_handler(uint16_t type, const uint8_t* data, size_t len,
                 "len=%zu",
                 proto->queue.num, dev->name, type, len);
             debugdump(data, len);
+            intr_raise_irq(
+                INTR_IRQ_SOFTIRQ);  // ソフトウェア割り込みからハンドラを呼び出す
             return 0;
         }
     }
     /* 対応していないプロトコルを受信 */
+    return 0;
+}
+
+int net_softirq_handler(void) {
+    struct net_protocol* proto;
+    struct net_protocol_queue_entry* entry;
+
+    for (proto = protocols; proto != NULL; proto = proto->next) {
+        while (1) {
+            entry = queue_pop(&proto->queue);
+            if (!entry) {
+                break;
+            }
+
+            debugf(
+                "popped from protocol queue (num=%u): dev=%s, type=0x%04x, "
+                "len=%zu",
+                proto->queue.num, entry->dev->name, proto->type, entry->len);
+            debugdump(entry->data, entry->len);
+
+            proto->handler(entry->data, entry->len, entry->dev);
+
+            memory_free(entry);
+        }
+    }
     return 0;
 }
 
