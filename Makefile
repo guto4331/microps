@@ -11,6 +11,7 @@ TESTS = test/step0.exe \
 		test/device_management.exe \
 		test/loopback.exe \
 		test/protocol_management.exe \
+		test/logical_interface.exe
 
 CFLAGS := $(CFLAGS) -g -W -Wall -Wno-unused-parameter -iquote .
 
