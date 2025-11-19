@@ -14,7 +14,8 @@ TESTS = test/step0.exe \
 		test/protocol_management.exe \
 		test/logical_interface.exe \
 		test/ip_output.exe \
-		test/ip_upper_protocol.exe
+		test/ip_upper_protocol.exe \
+		test/icmp_output.exe
 
 CFLAGS := $(CFLAGS) -g -W -Wall -Wno-unused-parameter -iquote .
 
