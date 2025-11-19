@@ -6,13 +6,15 @@ DRIVERS = driver/dummy.o \
 OBJS = util.o \
 	   net.o \
 	   ip.o \
+	   icmp.o
 
 TESTS = test/step0.exe \
 		test/device_management.exe \
 		test/loopback.exe \
 		test/protocol_management.exe \
 		test/logical_interface.exe \
-		test/ip_output.exe
+		test/ip_output.exe \
+		test/ip_upper_protocol.exe
 
 CFLAGS := $(CFLAGS) -g -W -Wall -Wno-unused-parameter -iquote .
 

@@ -25,12 +25,21 @@ struct ip_hdr {
     uint8_t options[];
 };
 
+/* IPの上位プロトコルを管理 */
+struct ip_protocol {
+    struct ip_protocol* next;
+    uint8_t type;
+    void (*handler)(const uint8_t* data, size_t len, ip_addr_t src,
+                    ip_addr_t dst, struct ip_iface* iface);
+};
+
 const ip_addr_t IP_ADDR_ANY = 0x00000000;       /* 0.0.0.0 */
 const ip_addr_t IP_ADDR_BROADCAST = 0xffffffff; /* 255.255.255.255 */
 
 /* NOTE: if you want to add/delete the entries after net_run(), you need to
  * protect these lists with a mutex. */
 static struct ip_iface* ifaces;
+static struct ip_protocol* protocols;
 
 int ip_addr_pton(const char* p, ip_addr_t* n) {
     char *sp, *ep;
@@ -157,6 +166,33 @@ struct ip_iface* ip_iface_select(ip_addr_t addr) {
     return NULL;
 }
 
+/* NOTE: must not be call after net_run() */
+int ip_protocol_register(uint8_t type,
+                         void (*handler)(const uint8_t* data, size_t len,
+                                         ip_addr_t src, ip_addr_t dst,
+                                         struct ip_iface* iface)) {
+    struct ip_protocol* entry;
+
+    for (entry = protocols; entry != NULL; entry = entry->next) {
+        if (type == entry->type) {
+            errorf("IP protocol is already registered: type=%u", type);
+            return -1;
+        }
+    }
+
+    entry = memory_alloc(sizeof(*entry));
+    if (!entry) {
+        errorf("memory_alloc() failed");
+        return -1;
+    }
+    entry->type = type;
+    entry->handler = handler;
+    entry->next = protocols;
+    protocols = entry;
+    infof("registered IP protocol: type=%u", entry->type);
+    return 0;
+}
+
 static void ip_input(const uint8_t* data, size_t len, struct net_device* dev) {
     struct ip_hdr* hdr;
     uint8_t v, hl;
@@ -214,6 +250,17 @@ static void ip_input(const uint8_t* data, size_t len, struct net_device* dev) {
            ip_addr_ntop(iface->unicast, addr, sizeof(addr)), hdr->protocol,
            total);
     ip_dump(data, total);
+
+    /* データを上位プロトコルへ振り分ける */
+    struct ip_protocol* entry;
+    for (entry = protocols; entry != NULL; entry = entry->next) {
+        if (hdr->protocol == entry->type) {
+            entry->handler(data + hlen, total - hlen, hdr->src, hdr->dst,
+                           iface);
+            return;
+        }
+    }
+    debugf("no handler for IP protocol: %u", hdr->protocol);
 }
 
 /* 送信するための関数 */
