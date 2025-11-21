@@ -6,7 +6,8 @@ DRIVERS = driver/dummy.o \
 OBJS = util.o \
 	   net.o \
 	   ip.o \
-	   icmp.o
+	   icmp.o \
+	   ether.o
 
 TESTS = test/step0.exe \
 		test/device_management.exe \
@@ -15,7 +16,8 @@ TESTS = test/step0.exe \
 		test/logical_interface.exe \
 		test/ip_output.exe \
 		test/ip_upper_protocol.exe \
-		test/icmp_output.exe
+		test/icmp_output.exe \
+		test/tap.exe
 
 CFLAGS := $(CFLAGS) -g -W -Wall -Wno-unused-parameter -iquote .
 
@@ -23,6 +25,7 @@ ifeq ($(shell uname),Linux)
   # Linux specific settings
   BASE = platform/linux
   CFLAGS := $(CFLAGS) -pthread -iquote $(BASE)
+  DRIVERS := $(DRIVERS) $(BASE)/driver/ether_tap.o
   OBJS := $(OBJS) $(BASE)/intr.o
 endif
 
