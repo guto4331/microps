@@ -2,6 +2,8 @@
   "files.associations": {
     "*.txt": "plaintext",
     "stdlib.h": "c",
-    "ether_tap.h": "c"
+    "ether_tap.h": "c",
+    "arp.h": "c",
+    "string.h": "c"
   }
 }

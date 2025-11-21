@@ -7,7 +7,8 @@ OBJS = util.o \
 	   net.o \
 	   ip.o \
 	   icmp.o \
-	   ether.o
+	   ether.o \
+	   arp.o
 
 TESTS = test/step0.exe \
 		test/device_management.exe \
