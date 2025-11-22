@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/time.h>
 
 #include "arp.h"
 #include "icmp.h"
@@ -27,10 +28,18 @@ struct net_protocol_queue_entry {
     uint8_t data[];
 };
 
+struct net_timer {
+    struct net_timer* next;
+    struct timeval interval;
+    struct timeval last;
+    void (*handler)(void);
+};
+
 /* NOTE: if you want to add/delete the entries after net_run(), you need to
  * protect these lists with a mutex. */
 static struct net_device* devices;
 static struct net_protocol* protocols;  // 対応するプロトコルをリストでもつ
+static struct net_timer* timers;
 
 struct net_device* net_device_alloc(void) {
     struct net_device* dev = memory_alloc(sizeof(*dev));
@@ -53,6 +62,43 @@ int net_device_register(struct net_device* dev) {
     devices = dev;
 
     infof("registered: dev=%s, type=0x%04x", dev->name, dev->type);
+    return 0;
+}
+
+/* NOTE: must not be call after net_run() */
+int net_timer_register(struct timeval interval, void (*handler)(void)) {
+    struct net_timer* timer;
+
+    timer = memory_alloc(sizeof(*timer));
+    if (!timer) {
+        errorf("memory_alloc() failed");
+        return -1;
+    }
+
+    timer->interval = interval;
+    timer->handler = handler;
+    gettimeofday(&timer->last, NULL);
+
+    timer->next = timers;
+    timers = timer;
+    infof("timer registered: interval=%ld.%06ld sec", interval.tv_sec,
+          interval.tv_usec);
+    return 0;
+}
+
+int net_timer_handler(void) {
+    struct net_timer* timer;
+    struct timeval now, diff;
+
+    for (timer = timers; timer != NULL; timer = timer->next) {
+        /* 最後の発火からの経過時間が、intervalを超えているなら発火する */
+        gettimeofday(&now, NULL);
+        timersub(&now, &timer->last, &diff);
+        if (timercmp(&timer->interval, &diff, <) != 0) {
+            timer->handler();
+            timer->last = now;
+        }
+    }
     return 0;
 }
 

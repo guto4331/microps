@@ -1,7 +1,9 @@
+#include <errno.h>
 #include <pthread.h>
 #include <signal.h>
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
 
 #include "net.h"
 #include "platform.h"
@@ -66,12 +68,35 @@ int intr_request_irq(unsigned int irq,
 
 int intr_raise_irq(unsigned int irq) { return pthread_kill(tid, (int)irq); }
 
+static int intr_timer_setup(struct itimerspec* interval) {
+    timer_t id;
+
+    if (timer_create(CLOCK_REALTIME, NULL, &id) == -1) {
+        errorf("timer_create() failed: %s", strerror(errno));
+        return -1;
+    }
+    if (timer_settime(id, 0, interval, NULL) == -1) {
+        errorf("timer_settime() failed: %s", strerror(errno));
+        return -1;
+    }
+    return 0;
+}
+
 static void* intr_thread(void* arg) {
+    const struct timespec ts = {0, 1000000};  // 1ms
+    struct itimerspec interval = {
+        .it_interval = ts,
+        .it_value = ts,
+    };
     int terminate = 0, sig, err;
     struct irq_entry* entry;
 
     debugf("start...");
     pthread_barrier_wait(&barrier);
+    if (intr_timer_setup(&interval) < 0) {
+        errorf("intr_timer_setup() failed");
+        return NULL;
+    }
 
     while (!terminate) {
         err = sigwait(&sigmask, &sig);
@@ -86,6 +111,9 @@ static void* intr_thread(void* arg) {
                 break;
             case SIGUSR1:  // ソフトウェア割り込み
                 net_softirq_handler();
+                break;
+            case SIGALRM:  // タイマー割り込み
+                net_timer_handler();
                 break;
             default:
                 for (entry = irqs; entry; entry = entry->next) {
@@ -132,5 +160,6 @@ int intr_init(void) {
     sigemptyset(&sigmask);
     sigaddset(&sigmask, SIGHUP);
     sigaddset(&sigmask, SIGUSR1);
+    sigaddset(&sigmask, SIGALRM);
     return 0;
 }
