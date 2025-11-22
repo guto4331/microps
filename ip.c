@@ -306,9 +306,9 @@ static ssize_t ip_output_core(struct ip_iface* iface, uint8_t protocol,
     hdr->ttl = 255;
     hdr->protocol = protocol;
     hdr->sum = 0;
-    hdr->sum = cksum16((uint16_t*)hdr, hlen, 0);
     hdr->src = src;
     hdr->dst = dst;
+    hdr->sum = cksum16((uint16_t*)hdr, hlen, 0);
 
     memcpy(hdr + 1, data, len);
 
