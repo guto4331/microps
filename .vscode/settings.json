@@ -4,6 +4,7 @@
     "stdlib.h": "c",
     "ether_tap.h": "c",
     "arp.h": "c",
-    "string.h": "c"
+    "string.h": "c",
+    "time.h": "c"
   }
 }
