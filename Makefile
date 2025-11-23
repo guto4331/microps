@@ -23,7 +23,9 @@ TESTS = test/step0.exe \
 		test/arp.exe \
 		test/ip_routing.exe \
 		test/udp_inout.exe \
-		test/udp_pcb.exe
+		test/udp_pcb.exe \
+		test/udp_api_echoback.exe \
+		test/udp_api_bind_auto.exe
 
 CFLAGS := $(CFLAGS) -g -W -Wall -Wno-unused-parameter -iquote .
 
