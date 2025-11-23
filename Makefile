@@ -19,7 +19,8 @@ TESTS = test/step0.exe \
 		test/ip_upper_protocol.exe \
 		test/icmp_output.exe \
 		test/tap.exe \
-		test/arp.exe
+		test/arp.exe \
+		test/ip_routing.exe
 
 CFLAGS := $(CFLAGS) -g -W -Wall -Wno-unused-parameter -iquote .
 

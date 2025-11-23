@@ -34,6 +34,15 @@ struct ip_protocol {
                     ip_addr_t dst, struct ip_iface* iface);
 };
 
+/* ルーティングテーブルのエントリ */
+struct ip_route {
+    struct ip_route* next;
+    ip_addr_t network;
+    ip_addr_t netmask;
+    ip_addr_t nexthop;
+    struct ip_iface* iface;
+};
+
 const ip_addr_t IP_ADDR_ANY = 0x00000000;       /* 0.0.0.0 */
 const ip_addr_t IP_ADDR_BROADCAST = 0xffffffff; /* 255.255.255.255 */
 
@@ -41,6 +50,7 @@ const ip_addr_t IP_ADDR_BROADCAST = 0xffffffff; /* 255.255.255.255 */
  * protect these lists with a mutex. */
 static struct ip_iface* ifaces;
 static struct ip_protocol* protocols;
+static struct ip_route* routes;
 
 int ip_addr_pton(const char* p, ip_addr_t* n) {
     char *sp, *ep;
@@ -111,6 +121,78 @@ static void ip_dump(const uint8_t* data, size_t len) {
     funlockfile(stderr);
 }
 
+/* NOTE: must not be call after net_run() */
+static struct ip_route* ip_route_add(ip_addr_t network, ip_addr_t netmask,
+                                     ip_addr_t nexthop,
+                                     struct ip_iface* iface) {
+    struct ip_route* route;
+    char addr1[IP_ADDR_STR_LEN];
+    char addr2[IP_ADDR_STR_LEN];
+    char addr3[IP_ADDR_STR_LEN];
+    char addr4[IP_ADDR_STR_LEN];
+
+    route = memory_alloc(sizeof(*route));
+    if (!route) {
+        errorf("memory_alloc() failed");
+        return NULL;
+    }
+    route->next = routes;
+    route->network = network;
+    route->netmask = netmask;
+    route->nexthop = nexthop;
+    route->iface = iface;
+    routes = route;
+
+    infof("added route: network=%s, netmask=%s, nexthop=%s, iface=%s (dev=%s)",
+          ip_addr_ntop(network, addr1, sizeof(addr1)),
+          ip_addr_ntop(netmask, addr2, sizeof(addr2)),
+          ip_addr_ntop(nexthop, addr3, sizeof(addr3)),
+          ip_addr_ntop(iface->unicast, addr4, sizeof(addr4)),
+          NET_IFACE(iface)->dev->name);
+    return route;
+}
+
+static struct ip_route* ip_route_lookup(ip_addr_t dst) {
+    struct ip_route *route, *candidate = NULL;
+
+    for (route = routes; route != NULL; route = route->next) {
+        /* 宛先がサブネット内にあるか？ */
+        if ((dst & route->netmask) != route->network) {
+            continue;
+        }
+        /* longest match */
+        if (!candidate || ntoh32(candidate->netmask) < ntoh32(route->netmask)) {
+            candidate = route;
+        }
+    }
+    return candidate;
+}
+
+/* NOTE: must not be call after net_run() */
+int ip_route_set_default_gateway(struct ip_iface* iface, const char* gateway) {
+    ip_addr_t gw;
+
+    if (ip_addr_pton(gateway, &gw) < 0) {
+        errorf("invalid gateway address: %s", gateway);
+        return -1;
+    }
+    if (!ip_route_add(IP_ADDR_ANY, IP_ADDR_ANY, gw, iface)) {
+        errorf("ip_route_add() failed");
+        return -1;
+    }
+    return 0;
+}
+
+struct ip_iface* ip_route_get_iface(ip_addr_t dst) {
+    struct ip_route* route;
+
+    route = ip_route_lookup(dst);
+    if (!route) {
+        return NULL;
+    }
+    return route->iface;
+}
+
 struct ip_iface* ip_iface_alloc(const char* unicast, const char* netmask) {
     struct ip_iface* iface;
 
@@ -144,6 +226,9 @@ int ip_iface_register(struct net_device* dev, struct ip_iface* iface) {
     }
     iface->next = ifaces;
     ifaces = iface;
+
+    ip_route_add(iface->unicast & iface->netmask, iface->netmask, IP_ADDR_ANY,
+                 iface);
 
     char addr1[IP_ADDR_STR_LEN];
     char addr2[IP_ADDR_STR_LEN];
@@ -289,7 +374,8 @@ static int ip_output_device(struct ip_iface* iface, const uint8_t* data,
 
 static ssize_t ip_output_core(struct ip_iface* iface, uint8_t protocol,
                               const uint8_t* data, size_t len, ip_addr_t src,
-                              ip_addr_t dst, uint16_t id, uint16_t offset) {
+                              ip_addr_t dst, ip_addr_t nexthop, uint16_t id,
+                              uint16_t offset) {
     uint8_t buf[IP_TOTAL_SIZE_MAX];
     struct ip_hdr* hdr;
     uint16_t hlen, total;
@@ -315,7 +401,7 @@ static ssize_t ip_output_core(struct ip_iface* iface, uint8_t protocol,
     debugf("dev=%s, dst=%s, protocol=%u, len=%u", NET_IFACE(iface)->dev->name,
            ip_addr_ntop(dst, addr, sizeof(addr)), protocol, total);
     ip_dump(buf, total);
-    return ip_output_device(iface, buf, total, dst);
+    return ip_output_device(iface, buf, total, nexthop);
 }
 
 static uint16_t ip_generate_id(void) {
@@ -331,30 +417,32 @@ static uint16_t ip_generate_id(void) {
 
 ssize_t ip_output(uint8_t protocol, const uint8_t* data, size_t len,
                   ip_addr_t src, ip_addr_t dst) {
+    struct ip_route* route;
     struct ip_iface* iface;
     char addr[IP_ADDR_STR_LEN];
+    ip_addr_t nexthop;
     uint16_t id;
 
-    if (src == IP_ADDR_ANY) {
-        errorf("ip routing is not implemented yet");
+    if (src == IP_ADDR_ANY && dst == IP_ADDR_BROADCAST) {
+        errorf("source address is required for broadcast");
         return -1;
-    } else {
-        iface = ip_iface_select(src);
-        if (!iface) {
-            errorf("no IP interface for src=%s",
-                   ip_addr_ntop(src, addr, sizeof(addr)));
-            return -1;
-        }
-
-        if (!((dst & iface->netmask) ==
-                  (iface->unicast & iface->netmask) /* 同じサブネットにいる */
-              || dst == IP_ADDR_BROADCAST)) {
-            errorf("unreachable dst=%s from src=%s",
-                   ip_addr_ntop(dst, addr, sizeof(addr)),
-                   ip_addr_ntop(src, addr, sizeof(addr)));
-            return -1;
-        }
     }
+
+    route = ip_route_lookup(dst);
+    if (!route) {
+        errorf("no route to host: dst=%s",
+               ip_addr_ntop(dst, addr, sizeof(addr)));
+        return -1;
+    }
+    iface = route->iface;
+    /* 自分のifaceのIPアドレスでしか送信できない */
+    if (src != IP_ADDR_ANY && src != iface->unicast) {
+        errorf("source address mismatch: src=%s, iface=%s",
+               ip_addr_ntop(src, addr, sizeof(addr)),
+               ip_addr_ntop(iface->unicast, addr, sizeof(addr)));
+        return -1;
+    }
+    nexthop = (route->nexthop != IP_ADDR_ANY) ? route->nexthop : dst;
 
     if (NET_IFACE(iface)->dev->mtu < IP_HDR_SIZE_MIN + len) {
         errorf("IP packet is too large: len=%zu, mtu=%u", len,
@@ -363,8 +451,8 @@ ssize_t ip_output(uint8_t protocol, const uint8_t* data, size_t len,
     }
 
     id = ip_generate_id();
-    if (ip_output_core(iface, protocol, data, len, iface->unicast, dst, id, 0) <
-        0) {
+    if (ip_output_core(iface, protocol, data, len, iface->unicast, dst, nexthop,
+                       id, 0) < 0) {
         errorf("ip_output_core() failed");
         return -1;
     }
