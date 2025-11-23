@@ -8,7 +8,8 @@ OBJS = util.o \
 	   ip.o \
 	   icmp.o \
 	   ether.o \
-	   arp.o
+	   arp.o \
+	   udp.o
 
 TESTS = test/step0.exe \
 		test/device_management.exe \
@@ -20,7 +21,8 @@ TESTS = test/step0.exe \
 		test/icmp_output.exe \
 		test/tap.exe \
 		test/arp.exe \
-		test/ip_routing.exe
+		test/ip_routing.exe \
+		test/udp_inout.exe
 
 CFLAGS := $(CFLAGS) -g -W -Wall -Wno-unused-parameter -iquote .
 

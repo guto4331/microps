@@ -10,6 +10,7 @@
 #include "icmp.h"
 #include "ip.h"
 #include "platform.h"
+#include "udp.h"
 #include "util.h"
 
 struct net_protocol {
@@ -315,6 +316,10 @@ int net_init(void) {
     }
     if (icmp_init() < 0) {
         errorf("icmp_init() failed");
+        return -1;
+    }
+    if (udp_init() < 0) {
+        errorf("udp_init() failed");
         return -1;
     }
     infof("initialized");

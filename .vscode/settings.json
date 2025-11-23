@@ -5,6 +5,7 @@
     "ether_tap.h": "c",
     "arp.h": "c",
     "string.h": "c",
-    "time.h": "c"
+    "time.h": "c",
+    "stddef.h": "c"
   }
 }
