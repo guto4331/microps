@@ -11,4 +11,8 @@ extern ssize_t udp_output(struct ip_endpoint* src, struct ip_endpoint* dst,
 
 extern int udp_init(void);
 
+extern int udp_open(void);
+extern int udp_bind(int index, struct ip_endpoint* local);
+extern int udp_close(int id);
+
 #endif
