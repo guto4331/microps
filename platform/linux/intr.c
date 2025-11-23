@@ -112,6 +112,9 @@ static void* intr_thread(void* arg) {
             case SIGUSR1:  // ソフトウェア割り込み
                 net_softirq_handler();
                 break;
+            case SIGUSR2:  // イベント割り込み
+                net_event_handler();
+                break;
             case SIGALRM:  // タイマー割り込み
                 net_timer_handler();
                 break;
@@ -160,6 +163,7 @@ int intr_init(void) {
     sigemptyset(&sigmask);
     sigaddset(&sigmask, SIGHUP);
     sigaddset(&sigmask, SIGUSR1);
+    sigaddset(&sigmask, SIGUSR2);
     sigaddset(&sigmask, SIGALRM);
     return 0;
 }
