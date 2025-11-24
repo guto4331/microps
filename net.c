@@ -10,6 +10,7 @@
 #include "icmp.h"
 #include "ip.h"
 #include "platform.h"
+#include "tcp.h"
 #include "udp.h"
 #include "util.h"
 
@@ -355,6 +356,10 @@ int net_init(void) {
     }
     if (udp_init() < 0) {
         errorf("udp_init() failed");
+        return -1;
+    }
+    if (tcp_init() < 0) {
+        errorf("tcp_init() failed");
         return -1;
     }
     infof("initialized");
