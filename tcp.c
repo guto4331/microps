@@ -274,6 +274,7 @@ static void tcp_segment_arrives(struct tcp_segment_info* seg, uint8_t flags,
                                 uint8_t* data, size_t len,
                                 struct ip_endpoint* local,
                                 struct ip_endpoint* foreign) {
+    int acceptable = 0;
     struct tcp_pcb* pcb;
 
     pcb = tcp_pcb_select(local, foreign);
@@ -371,6 +372,46 @@ static void tcp_segment_arrives(struct tcp_segment_info* seg, uint8_t flags,
     /*
      * 1st check sequence number
      */
+    switch (pcb->state) {
+        case TCP_PCB_STATE_SYN_RECEIVED:
+        case TCP_PCB_STATE_ESTABLISHED:
+            if (!seg->len) {  // dataがあるか
+                if (!pcb->rcv.wnd) {
+                    /* 空きがないなら、seq番号が一致しているときのみOK */
+                    if (seg->seq == pcb->rcv.nxt) {
+                        acceptable = 1;
+                    }
+                } else {
+                    /* 期待するseq番号以上で、windowの範囲内ならOK */
+                    if (pcb->rcv.nxt <= seg->seq &&
+                        seg->seq < pcb->rcv.nxt + pcb->rcv.wnd) {
+                        acceptable = 1;
+                    }
+                }
+            } else {
+                if (!pcb->rcv.wnd) {
+                } else {
+                    /*
+                        期待するseq番号以上で、windowの範囲内であるか、
+                        期待するseq番号以上のデータが含まれていて、
+                            期待するデータがwindowの範囲内であればOK
+                    */
+                    if ((pcb->rcv.nxt <= seg->seq &&
+                         seg->seq < pcb->rcv.nxt + pcb->rcv.wnd) ||
+                        (pcb->rcv.nxt <= seg->seq + seg->len - 1 &&
+                         seg->seq + seg->len - 1 <
+                             pcb->rcv.nxt + pcb->rcv.wnd)) {
+                        acceptable = 1;
+                    }
+                }
+            }
+            if (!acceptable) {
+                if (!TCP_FLG_ISSET(flags, TCP_FLG_RST)) {
+                    tcp_output(pcb, TCP_FLG_ACK, NULL, 0);
+                }
+                return;
+            }
+    }
 
     /*
      * 2nd check the RST bit
@@ -400,6 +441,26 @@ static void tcp_segment_arrives(struct tcp_segment_info* seg, uint8_t flags,
                                    foreign);
                 return;
             }
+
+        case TCP_PCB_STATE_ESTABLISHED:
+            if (pcb->snd.una < seg->ack && seg->ack <= pcb->snd.nxt) {
+                /* 送信済み、未確認 */
+                pcb->snd.una = seg->ack;
+
+                /* windowの情報を更新 */
+                if (pcb->snd.wl1 < seg->seq ||
+                    (pcb->snd.wl1 == seg->seq && pcb->snd.wl2 <= seg->ack)) {
+                    pcb->snd.wnd = seg->wnd;
+                    pcb->snd.wl1 = seg->seq;
+                    pcb->snd.wl2 = seg->ack;
+                }
+            } else if (seg->ack < pcb->snd.una) {
+                /* 既に確認済み */
+            } else if (seg->ack > pcb->snd.nxt) {
+                /* 未送信 */
+                tcp_output(pcb, TCP_FLG_ACK, NULL, 0);
+                return;
+            }
             break;
     }
 
@@ -410,6 +471,18 @@ static void tcp_segment_arrives(struct tcp_segment_info* seg, uint8_t flags,
     /*
      * 7th, process the segment text
      */
+    switch (pcb->state) {
+        case TCP_PCB_STATE_ESTABLISHED:
+            if (len) {
+                /* 受信データをbufにコピーしてACKを返す */
+                memcpy(pcb->buf + (sizeof(pcb->buf) - pcb->rcv.wnd), data, len);
+                pcb->rcv.nxt = seg->seq + len;
+                pcb->rcv.wnd -= len;
+                tcp_output(pcb, TCP_FLG_ACK, NULL, 0);
+                sched_wakeup(&pcb->ctx);
+            }
+            break;
+    }
 
     /*
      * 8th, check the FIN bit
@@ -583,4 +656,110 @@ int tcp_close(int id) {
     tcp_pcb_release(pcb);
     mutex_unlock(&mutex);
     return 0;
+}
+
+ssize_t tcp_send(int id, uint8_t* data, size_t len) {
+    struct tcp_pcb* pcb;
+    ssize_t sent = 0;
+    struct ip_iface* iface;
+    size_t mss, cap, slen;
+
+    mutex_lock(&mutex);
+    pcb = tcp_pcb_get(id);
+    if (!pcb) {
+        errorf("invalid TCP PCB id: %d", id);
+        mutex_unlock(&mutex);
+        return -1;
+    }
+
+RETRY:
+    switch (pcb->state) {
+        case TCP_PCB_STATE_ESTABLISHED:
+            iface = ip_route_get_iface(pcb->foreign.addr);
+            if (!iface) {
+                errorf("no interface for local addr: %u", pcb->local.addr);
+                mutex_unlock(&mutex);
+                return -1;
+            }
+            mss = NET_IFACE(iface)->dev->mtu - IP_HDR_SIZE_MIN -
+                  sizeof(struct tcp_hdr);
+            while (sent < (ssize_t)len) {
+                cap = pcb->snd.wnd - (pcb->snd.nxt - pcb->snd.una);
+                if (!cap) {
+                    /* 相手の受信bufが埋まっている */
+                    if (sched_sleep(&pcb->ctx, &mutex, NULL) < 0) {
+                        errorf("interrupted");
+                        if (!sent) {
+                            mutex_unlock(&mutex);
+                            errno = EINTR;
+                            return -1;
+                        }
+                        break;
+                    }
+                    goto RETRY;
+                }
+
+                /* mssで切って送信 */
+                slen = MIN(len - sent, MIN(cap, mss));
+                if (tcp_output(pcb, TCP_FLG_PSH | TCP_FLG_ACK, data + sent,
+                               slen) < 0) {
+                    errorf("tcp_output() failed");
+                    pcb->state = TCP_PCB_STATE_CLOSED;
+                    tcp_pcb_release(pcb);
+                    mutex_unlock(&mutex);
+                    return -1;
+                }
+                pcb->snd.nxt += slen;
+                sent += slen;
+            }
+            break;
+        default:
+            errorf("invalid TCP PCB state: %d", pcb->state);
+            mutex_unlock(&mutex);
+            return -1;
+    }
+
+    mutex_unlock(&mutex);
+    return sent;
+}
+
+ssize_t tcp_receive(int id, uint8_t* buf, size_t size) {
+    struct tcp_pcb* pcb;
+    size_t remain, len;
+
+    mutex_lock(&mutex);
+    pcb = tcp_pcb_get(id);
+    if (!pcb) {
+        errorf("invalid TCP PCB id: %d", id);
+        mutex_unlock(&mutex);
+        return -1;
+    }
+
+RETRY:
+    switch (pcb->state) {
+        case TCP_PCB_STATE_ESTABLISHED:
+            remain = sizeof(pcb->buf) - pcb->rcv.wnd;
+            if (!remain) {
+                if (sched_sleep(&pcb->ctx, &mutex, NULL) < 0) {
+                    errorf("interrupted");
+                    mutex_unlock(&mutex);
+                    errno = EINTR;
+                    return -1;
+                }
+                goto RETRY;
+            }
+            break;
+        default:
+            errorf("invalid TCP PCB state: %d", pcb->state);
+            mutex_unlock(&mutex);
+            return -1;
+    }
+
+    len = MIN(size, remain);
+    memcpy(buf, pcb->buf, len);
+    // bufにコピー済みの分は詰める
+    memmove(pcb->buf, pcb->buf + len, remain - len);
+    pcb->rcv.wnd += len;
+    mutex_unlock(&mutex);
+    return len;
 }
