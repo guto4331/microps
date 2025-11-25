@@ -28,7 +28,8 @@ TESTS = test/step0.exe \
 		test/udp_api_echoback.exe \
 		test/udp_api_bind_auto.exe \
 		test/udp_intr.exe \
-		test/tcp_input.exe
+		test/tcp_input.exe \
+		test/tcp_passive_open.exe
 
 CFLAGS := $(CFLAGS) -g -W -Wall -Wno-unused-parameter -iquote .
 
