@@ -37,6 +37,9 @@
 #define TCP_PCB_STATE_CLOSE_WAIT 10
 #define TCP_PCB_STATE_LAST_ACK 11
 
+#define TCP_DEFAULT_RTO 200000     /* micro seconds */
+#define TCP_RETRANSMIT_DEADLINE 12 /* seconds */
+
 /* 擬似ヘッダ：チェックサムの計算に用いる */
 struct pseudo_hdr {
     uint32_t src;
@@ -90,6 +93,18 @@ struct tcp_pcb {
     uint16_t mss;       // max segment size
     uint8_t buf[65535]; /* receive buffer */
     struct sched_ctx ctx;
+    struct queue_head queue; /* retransmit queue */
+};
+
+struct tcp_queue_entry {
+    struct timeval first;
+    struct timeval last;  // 前回の再送時刻
+    unsigned int rto;     /* micro seconds */
+    /* seqとflgがあればpcbから取ってこれる */
+    uint32_t seq;
+    uint8_t flg;
+    size_t len;
+    uint8_t data[];
 };
 
 static mutex_t mutex = MUTEX_INITIALIZER;
@@ -253,6 +268,80 @@ static ssize_t tcp_output_segment(uint32_t seq, uint32_t ack, uint8_t flg,
     return len;
 }
 
+/*
+ * TCP Retransmit
+ *
+ * NOTE: TCP Retransmit functions must be called after mutex locked
+ */
+
+static int tcp_retransmit_queue_add(struct tcp_pcb* pcb, uint32_t seq,
+                                    uint8_t flg, uint8_t* data, size_t len) {
+    struct tcp_queue_entry* entry;
+
+    entry = memory_alloc(sizeof(*entry) + len);
+    if (!entry) {
+        errorf("memory_alloc() failed");
+        return -1;
+    }
+    entry->rto = TCP_DEFAULT_RTO;
+    entry->seq = seq;
+    entry->flg = flg;
+    entry->len = len;
+    mempcy(entry->data, data, entry->len);
+    gettimeofday(&entry->first, NULL);
+    entry->last = entry->first;
+    if (!queue_push(&pcb->queue, entry)) {
+        errorf("queue_push() failed");
+        memory_free(entry);
+        return -1;
+    }
+    return 0;
+}
+
+static void tcp_retransmit_queue_cleanup(struct tcp_pcb* pcb) {
+    struct tcp_queue_entry* entry;
+
+    while (1) {
+        entry = queue_peek(&pcb->queue);
+        if (!entry) {
+            break;
+        }
+        if (entry->seq >= pcb->snd.una) {
+            // 未確認なので残す
+            break;
+        }
+        entry = queue_pop(&pcb->queue);
+        debugf("popped from retransmit queue: seq=%u, flags=%s, len=%zu",
+               entry->seq, tcp_flg_ntoa(entry->flg), entry->len);
+        memory_free(entry);
+    }
+    return;
+}
+
+static void tcp_retransmit_queue_emit(void* arg, void* data) {
+    struct tcp_pcb* pcb;
+    struct tcp_queue_entry* entry;
+    struct timeval now, diff, timeout;
+
+    pcb = (struct tcp_pcb*)arg;
+    entry = (struct tcp_queue_entry*)data;
+    gettimeofday(&now, NULL);
+    timersub(&now, &entry->last, &diff);
+    if (diff.tv_sec >= TCP_RETRANSMIT_DEADLINE) {
+        pcb->state = TCP_PCB_STATE_CLOSED;
+        sched_wakeup(&pcb->ctx);
+        return;
+    }
+    timeout = entry->last;
+    timeval_add_usec(&timeout, entry->rto);
+    if (timercmp(&now, &timeout, >)) {
+        tcp_output_segment(entry->seq, pcb->rcv.nxt, entry->flg, pcb->rcv.wnd,
+                           entry->data, entry->len, &pcb->local, &pcb->foreign);
+        entry->last = now;
+        entry->rto *= 2;  // exponential backoff
+    }
+}
+
 static ssize_t tcp_output(struct tcp_pcb* pcb, uint8_t flg, uint8_t* data,
                           size_t len) {
     uint32_t seq;
@@ -263,7 +352,8 @@ static ssize_t tcp_output(struct tcp_pcb* pcb, uint8_t flg, uint8_t* data,
         seq = pcb->iss;
     }
     if (TCP_FLG_ISSET(flg, TCP_FLG_SYN | TCP_FLG_FIN) || len) {
-        /* todo */
+        // seq番号を消費するので再送の対象
+        tcp_retransmit_queue_add(pcb, seq, flg, data, len);
     }
     return tcp_output_segment(seq, pcb->rcv.nxt, flg, pcb->rcv.wnd, data, len,
                               &pcb->local, &pcb->foreign);
@@ -446,6 +536,7 @@ static void tcp_segment_arrives(struct tcp_segment_info* seg, uint8_t flags,
             if (pcb->snd.una < seg->ack && seg->ack <= pcb->snd.nxt) {
                 /* 送信済み、未確認 */
                 pcb->snd.una = seg->ack;
+                tcp_retransmit_queue_cleanup(pcb);
 
                 /* windowの情報を更新 */
                 if (pcb->snd.wl1 < seg->seq ||
@@ -559,6 +650,19 @@ static void tcp_input(const uint8_t* data, size_t len, ip_addr_t src,
     mutex_unlock(&mutex);
 }
 
+static void tcp_timer(void) {
+    struct tcp_pcb* pcb;
+
+    mutex_lock(&mutex);
+    for (pcb = pcbs; pcb < tailof(pcbs); pcb++) {
+        if (pcb->state == TCP_PCB_STATE_FREE) {
+            continue;
+        }
+        queue_foreach(&pcb->queue, tcp_retransmit_queue_emit, pcb);
+    }
+    mutex_unlock(&mutex);
+}
+
 static void event_handler(void* arg) {
     struct tcp_pcb* pcb;
 
@@ -572,10 +676,15 @@ static void event_handler(void* arg) {
 }
 
 int tcp_init(void) {
+    struct timeval interval = {0, 100000};
+
     if (ip_protocol_register(IP_PROTOCOL_TCP, tcp_input) < 0) {
         return -1;
     }
     net_event_subscribe(event_handler, NULL);
+    if (net_timer_register(interval, tcp_timer) < 0) {
+        return -1;
+    }
     return 0;
 }
 
