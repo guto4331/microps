@@ -31,7 +31,8 @@ TESTS = test/step0.exe \
 		test/tcp_input.exe \
 		test/tcp_passive_open.exe \
 		test/tcp_data_trans.exe \
-		test/tcp_active_open.exe
+		test/tcp_active_open.exe \
+		test/tcp_close.exe
 
 CFLAGS := $(CFLAGS) -g -W -Wall -Wno-unused-parameter -iquote .
 
